@@ -1,0 +1,2 @@
+print("Robot is alive")
+
