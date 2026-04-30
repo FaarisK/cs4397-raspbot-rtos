@@ -1,9 +1,10 @@
 from Raspbot_Lib import Raspbot
 import socket
 import struct
+import math
 
 
-class ExitStop:
+class BotRef:
     def __init__(self, bot):
         self.bot = bot
 
@@ -17,14 +18,37 @@ class ExitStop:
         print("Exiting!!!")
 
 
-stop_obj = ExitStop(Raspbot())
+bot_ref = BotRef(Raspbot())
+
+ROOT2 = math.sqrt(2)
+WHEEL_PHASE = math.pi / 4
+MAX_SPEED = 100
 
 
 def ctrl_grid(x, y):
-    print(x, y)
+    move_angle = math.atan2(y, x)
+    wheel_cos = math.cos(move_angle - WHEEL_PHASE)
+    wheel_sin = math.sin(move_angle - WHEEL_PHASE)
+    speed = math.sqrt(x * x + y * y) / ROOT2
+
+    fl = wheel_cos * speed * MAX_SPEED
+    rl = wheel_sin * speed * MAX_SPEED
+    fr = wheel_sin * speed * MAX_SPEED
+    rr = wheel_cos * speed * MAX_SPEED
+    print(format(fl, '.3'), format(fr, '.3'))
+    print(format(rl, '.3'), format(rr, '.3'))
+    print(format(speed, '.3'))
+    print()
+
+    bot_ref.bot.Ctrl_Muto(0, round(fl))
+    bot_ref.bot.Ctrl_Muto(1, round(rl))
+    bot_ref.bot.Ctrl_Muto(2, round(fr))
+    bot_ref.bot.Ctrl_Muto(3, round(rr))
 
 
 def ctrl_radial(r, a):
+    a -= 0.5
+
     print(r, a)
 
 
