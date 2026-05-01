@@ -87,9 +87,9 @@ class Robot:
             self.reset_motion()
 
     def update(self):
-        lastTime = self.__updateTime
-        nextTime = time.time()
-        timeDiff = nextTime - lastTime
+        last_time = self.__update_time
+        next_time = time.time()
+        time_diff = next_time - last_time
         # TODO determine motion vector (speed/angle/angular)
         # TODO translate to wheel and camera movements (based on update freq)
         # TODO update motor/servo parameters
