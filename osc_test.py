@@ -28,7 +28,12 @@ WHEEL_PHASE = math.pi / 4
 # WARNING: Too high a value will draw too much power, RaspberryPi
 #        : CPU voltage will fall below tolerance and reset;
 #        : 100 is a safe value.
-MAX_SPEED = 99
+MAX_SPEED = 100
+
+
+def ctrl_cam(yaw, pitch):
+    bot_ref.bot.Ctrl_Servo(1, round(yaw))
+    bot_ref.bot.Ctrl_Servo(2, round(pitch))
 
 
 def ctrl_grid(x, y):
@@ -113,6 +118,7 @@ convert['f'] = read_float
 convert['i'] = read_int
 
 methods = dict()
+methods['/ctrl/cam'] = ctrl_cam
 methods['/ctrl/grid'] = ctrl_grid
 methods['/ctrl/radial'] = ctrl_radial
 
