@@ -94,7 +94,7 @@ class Robot:
     # Is ultrasonic a one-time pulse or a continuous measurement?
     # Bot can be remote controlled, is 0x05 and 0x0c for enabling and reading this?
 
-    def set_rate_calibration(movement=1.0, rotation=2.25):
+    def set_rate_calibration(self, movement=1.0, rotation=2.25):
         """
         Sets the "constant" values for movement rates. This calibration could
         be estimated after a short test run or measured using the camera.
@@ -197,6 +197,8 @@ class Robot:
         move_rads = self.__angle + math.atan2(dy, dx)
         move_dist = math.sqrt(dx * dx + dy * dy)
 
+        self.__lerp_past_state()
+
         self.__target_pos.x = self.__pos.x + move_dist * math.cos(move_rads)
         self.__target_pos.y = self.__pos.y + move_dist * math.sin(move_rads)
         self.__target_angle = self.__angle + math.radians(dangle)
@@ -288,11 +290,8 @@ class Robot:
         Args:
             period (float): Expected time (seconds) before next update() call.
         """
-        last_time = self.__update_time
-        next_time = time.time()
-        time_diff = next_time - last_time
 
-        self.__lerp_past_state(time_diff)
+        self.__lerp_past_state()
         self.__set_next_state(period)
 
         state = self.__motor_state
@@ -307,15 +306,14 @@ class Robot:
         self.__camera_angle.yaw = self.__camera_target_angle.yaw
         self.__camera_angle.pitch = self.__camera_target_angle.pitch
 
-        self.__update_time = next_time
-
-    def __lerp_past_state(self, time_diff: float):
+    def __lerp_past_state(self):
         """
         Calculate current state based on previous motor parameters.
-
-        Args:
-            time_diff (float): Time delta (seconds) from last update() call.
         """
+        last_time = self.__update_time
+        next_time = time.time()
+        time_diff = next_time - last_time
+
         state = self.__motor_state
         rads = time_diff * state.va
         if -0.0001 < rads < 0.0001:
@@ -344,6 +342,8 @@ class Robot:
         self.__pos.x += dx
         self.__pos.y += dy
         self.__angle += rads
+
+        self.__update_time = next_time
 
     def __set_next_state(self, period: float):
         """
