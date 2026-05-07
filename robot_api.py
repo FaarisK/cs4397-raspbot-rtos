@@ -1,9 +1,9 @@
 import cv2
 import math
+import smbus
+import numpy
 import time
 from copy import copy
-
-from Raspbot_Lib import Raspbot
 
 
 class CameraAngle:
@@ -47,6 +47,14 @@ class MotorState:
         return f'| {fl}  {fr} | {vx}  {vy}\n| {rl}  {rr} | {va}'
 
 
+class TrackState:
+    def __init__(self, left: bool, midleft: bool, midright: bool, right: bool):
+        self.left = left
+        self.midleft = midleft
+        self.midright = midright
+        self.right = right
+
+
 class Robot:
     MAX_POWER = 100  # Up to 255 - Too high will shut off Pi
     # distance/(sec*power) (completely arbitrary units)
@@ -65,6 +73,43 @@ class Robot:
     CAMERA_PITCH_MIN = 0
     CAMERA_PITCH_MAX = 115
 
+    I2C_ADDRESS = 0x2b
+    I2C_BUS = 0x01
+
+    # I2C Register Values:
+    # 0x01 -W [n, d, s]     Write motor n (1..4) to speed s (0..255) in direction d (0,1)
+    # 0x02 -W [n, a]        Write servo n (1..2) to angle a (1: 0..180, 2: 0..90)
+    # 0x03 -W [e]           Write lightbar        enum value e (0..7)
+    # 0x04 -W [n, e]        Write light n (1..10) enum value e (0..7)
+    # 0x05 -W [x]           Write IR reader  enabled state x (F/T)
+    # 0x06 -W [x]           Write buzzer     enabled state x (F/T)
+    # 0x07 -W [x]           Write ultrasonic enabled state x (F/T)
+    # 0x08 -W [R, G, B]     Write lightbar RGB value
+    # 0x09 -W [n, R, G, B]  Write light n (1..10) RGB value
+    # 0x0a R- [lLrR]        Read IR track bitfield (left to right: L l r R)
+    # ---- --
+    # 0x0c R- [i]           Read IR reader value i (0..255) [See IR Remote Reference]
+    # 0x0d R- [k]           Read rear KEY1 value (F/T)
+    # ---- --
+    # 0x1a R- [L]           Read ultrasonic distance low-bits (mm)
+    # 0x1b R- [H]           Read ultrasonic distance high-bits (mm)
+    # ---- --
+    REG_MOTOR = 0x01
+    REG_SERVO = 0x02
+    REG_LED_ENUM_ALL = 0x03
+    REG_LED_ENUM_ONE = 0x04
+    REG_IR_SWITCH = 0x05
+    REG_BUZZER_SWITCH = 0x06
+    REG_ULTRASONIC_SWITCH = 0x07
+    REG_LED_RGB_ALL = 0x08
+    REG_LED_RGB_ONE = 0x09
+    REG_IR_TRACK = 0x0a
+    REG_IR_READER = 0x0c
+    REG_KEY1 = 0x0d
+    REG_ULTRASONIC_LOW = 0x1a
+    REG_ULTRASONIC_HIGH = 0x1b
+
+    # Motor / Servo IDs:
     ID_MOTOR_FL = 0
     ID_MOTOR_RL = 1
     ID_MOTOR_FR = 2
@@ -72,29 +117,45 @@ class Robot:
     ID_SERVO_YAW = 1
     ID_SERVO_PITCH = 2
 
-    REG_MOTOR = 0x01
-    REG_SERVO = 0x02
-    REG_LED_INT_ALL = 0x03
-    REG_LED_INT_ONE = 0x04
-    REG_IR_SWITCH = 0x05
-    REG_BUZZER = 0x06
-    REG_UNKNOWN_07 = 0x07  # "Ctrl_Ulatist_Switch" or "Ctrl_getDis_Switch" Ultrasonic distance sensor?
-    REG_LED_RGB_ALL = 0x08
-    REG_LED_RGB_ONE = 0x09
-    REG_IR_TRACK = 0x0A
-    # What about 0x0b?
-    REG_UNKNOWN_0C = 0x0C  # Reading IR sensor data?
-    # What about 0x0d-0x19?
-    REG_UNKNOWN_1A = 0x1A  # Reading "Ulatist" "diss_L" (diss HIGH byte) Ultrasonic distance (millimeters)?
-    REG_UNKNOWN_1B = 0x1B  # Reading "Ulatist" "diss_H" (diss LOW byte)  Ultrasonic distance (millimeters)?
-    # Any more registers?
-    # Potentiometers on the front control "distance from track sensors"
-    # Can track data be measured or is it just a binary register?
-    # (lights turn on when (variable distance) from floor).
-    # Is ultrasonic a one-time pulse or a continuous measurement?
-    # Bot can be remote controlled, is 0x05 and 0x0c for enabling and reading this?
+    # IR Remote Reference:
+    # +--------+  +--------------+
+    # |00 01 02|  |PWR   ^^  LIGT|
+    # |04 05 06|  | <<  SPKR  >> |
+    # |08 09 0a|  | <U   vv   U> |
+    # |0c 0d 0e|  | ++   00   -- |
+    # |10 11 12|  | 11   22   33 |
+    # |14 15 16|  | 44   55   66 |
+    # |18 19 1a|  | 77   88   99 |
+    # +--------+  +--------------+
+    RMT_POWER = 0x00
+    RMT_UP = 0x01
+    RMT_LIGHT = 0x02
+    RMT_LEFT = 0x04
+    RMT_SPEAKER = 0x05
+    RMT_RIGHT = 0x06
+    RMT_TURN_LEFT = 0x08
+    RMT_DOWN = 0x09
+    RMT_TURN_RIGHT = 0x0a
+    RMT_PLUS = 0x0c
+    RMT_0 = 0x0d
+    RMT_MINUS = 0x0e
+    RMT_1 = 0x10
+    RMT_2 = 0x11
+    RMT_3 = 0x12
+    RMT_4 = 0x14
+    RMT_5 = 0x15
+    RMT_6 = 0x16
+    RMT_7 = 0x18
+    RMT_8 = 0x19
+    RMT_9 = 0x1a
 
-    def set_rate_calibration(self, movement=1.0, rotation=2.25):
+    # Front Track Bitmasks:
+    TRACK_LEFTLEFT = 0b0100
+    TRACK_MIDLEFT = 0b1000
+    TRACK_MIDRIGHT = 0b0010
+    TRACK_RIGHTRIGHT = 0b0001
+
+    def set_rate_calibration(self, movement: float = 1.0, rotation: float = 2.25) -> None:
         """
         Sets the "constant" values for movement rates. This calibration could
         be estimated after a short test run or measured using the camera.
@@ -111,40 +172,54 @@ class Robot:
         Robot.ROTATION_RATE = math.radians(rotation)
 
     def __init__(self):
-        self.__bot = Raspbot()
+        self._i2c_device = smbus.SMBus(Robot.I2C_BUS)
+        self._i2c_buf_servo = [
+            [Robot.ID_SERVO_YAW, 0],
+            [Robot.ID_SERVO_PITCH, 0]
+        ]
+        self._i2c_buf_motor = [
+            [Robot.ID_MOTOR_FL, 0, 0],
+            [Robot.ID_MOTOR_RL, 0, 0],
+            [Robot.ID_MOTOR_FR, 0, 0],
+            [Robot.ID_MOTOR_RR, 0, 0]
+        ]
+        self._i2c_buf2 = [0, 0]
+        self._i2c_buf3 = [0, 0, 0]
+        self._i2c_buf4 = [0, 0, 0, 0]
         self.reset()
+
+    def __del__(self):
+        self.reset()
+        self._i2c_device.close()
 
     def reset(self) -> None:
         """
         Zeros the motors, homes the camera servos, disables lights and
         switches, and zeros the estimated and target states.
         """
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_FL, 0)
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_RL, 0)
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_FR, 0)
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_RR, 0)
-        self.__bot.Ctrl_Servo(Robot.ID_SERVO_YAW, Robot.CAMERA_HOME.yaw)
-        self.__bot.Ctrl_Servo(Robot.ID_SERVO_PITCH, Robot.CAMERA_HOME.pitch)
-        self.__bot.Ctrl_WQ2812_ALL(False, 0)
-        self.__bot.Ctrl_IR_Switch(False)
-        self.__bot.Ctrl_BEEP_Switch(False)
-        self.__bot.Ctrl_Ulatist_Switch(False)
+        self.write_motors(0, 0, 0, 0)
+        self.write_servos(Robot.CAMERA_HOME.yaw, Robot.CAMERA_HOME.pitch)
+        self.write_led_rgb_all(0, 0, 0)
+        self.write_led_enum_all(7)
+        self.toggle_buzzer(False)
+        self.toggle_ir_reader(False)
+        self.toggle_ultrasonic(False)
 
-        self.__motor_state = MotorState()
-        self.__pos = Point(0.0, 0.0)
-        self.__target_pos = Point(0.0, 0.0)
-        self.__angle = 0.0
-        self.__target_angle = 0.0
-        self.__camera_angle = copy(Robot.CAMERA_HOME)
-        self.__camera_target_angle = copy(Robot.CAMERA_HOME)
-        self.__update_time = time.time()
+        self._motor_state = MotorState()
+        self._pos = Point(0.0, 0.0)
+        self._target_pos = Point(0.0, 0.0)
+        self._angle = 0.0
+        self._target_angle = 0.0
+        self._camera_angle = copy(Robot.CAMERA_HOME)
+        self._camera_target_angle = copy(Robot.CAMERA_HOME)
+        self._update_time = time.time()
 
     def get_motor_state(self):
         """
         Returns:
             MotorState: A copy of the motor state after the last update() call.
         """
-        return copy(self.__motor_state)
+        return copy(self._motor_state)
 
     def turn_towards(self, angle: float) -> None:
         """
@@ -154,7 +229,7 @@ class Robot:
             angle (float): New target angle (degrees) relative to init.
                            (+A = Counter-clockwise)
         """
-        self.__target_angle = math.radians(angle)
+        self._target_angle = math.radians(angle)
 
     def get_target_angle(self) -> float:
         """
@@ -162,7 +237,7 @@ class Robot:
             float: The bot's target angle (degrees) relative to init.
                    (+A = Counter-clockwise)
         """
-        return math.degrees(self.__target_angle)
+        return math.degrees(self._target_angle)
 
     def get_angle(self) -> float:
         """
@@ -170,7 +245,7 @@ class Robot:
             float: The bot's estimated angle (degrees) relative to init.
                    (+A = Counter-clockwise)
         """
-        return math.degrees(self.__angle)
+        return math.degrees(self._angle)
 
     def move_towards(self, x: float, y: float) -> None:
         """
@@ -180,8 +255,8 @@ class Robot:
             x (float): X position component. (+X = Right relative to init)
             y (float): Y position component. (+Y = Forward relative to init)
         """
-        self.__target_pos.x = x
-        self.__target_pos.y = y
+        self._target_pos.x = x
+        self._target_pos.y = y
 
     def move_relative(self, dx: float, dy: float, dangle: float) -> None:
         """
@@ -194,14 +269,14 @@ class Robot:
             dangle (float): New angle relative to current angle (degrees).
                             (+A = Counter-clockwise)
         """
-        move_rads = self.__angle + math.atan2(dy, dx)
+        move_rads = self._angle + math.atan2(dy, dx)
         move_dist = math.sqrt(dx * dx + dy * dy)
 
         self.__lerp_past_state()
 
-        self.__target_pos.x = self.__pos.x + move_dist * math.cos(move_rads)
-        self.__target_pos.y = self.__pos.y + move_dist * math.sin(move_rads)
-        self.__target_angle = self.__angle + math.radians(dangle)
+        self._target_pos.x = self._pos.x + move_dist * math.cos(move_rads)
+        self._target_pos.y = self._pos.y + move_dist * math.sin(move_rads)
+        self._target_angle = self._angle + math.radians(dangle)
 
     def get_target_position(self) -> Point:
         """
@@ -209,7 +284,7 @@ class Robot:
             Point: Gets the estimated position after the last update() call
                    using arbitrary distance units.
         """
-        return copy(self.__target_pos)
+        return copy(self._target_pos)
 
     def get_position(self) -> Point:
         """
@@ -217,7 +292,7 @@ class Robot:
             Point: Gets the bot's current estimated position within arbitrary
                    bot space.
         """
-        return copy(self.__pos)
+        return copy(self._pos)
 
     def home_camera_angle(self) -> None:
         """
@@ -226,8 +301,8 @@ class Robot:
         Angles are very rough estimates at best and accuracy is both poor and
         variable.
         """
-        self.__camera_target_angle.yaw = Robot.CAMERA_HOME.yaw
-        self.__camera_target_angle.pitch = Robot.CAMERA_HOME.pitch
+        self._camera_target_angle.yaw = Robot.CAMERA_HOME.yaw
+        self._camera_target_angle.pitch = Robot.CAMERA_HOME.pitch
 
     def set_camera_angle(self, yaw: int, pitch: int) -> None:
         """
@@ -250,8 +325,8 @@ class Robot:
             pitch = 0
         if pitch > 90:
             pitch = 90
-        self.__camera_target_angle.yaw = yaw
-        self.__camera_target_angle.pitch = pitch
+        self._camera_target_angle.yaw = yaw
+        self._camera_target_angle.pitch = pitch
 
     def get_camera_angle(self) -> CameraAngle:
         """
@@ -261,7 +336,7 @@ class Robot:
             Angles are very rough estimates at best and accuracy is both poor
             and variable.
         """
-        return copy(self.__camera_angle)
+        return copy(self._camera_angle)
 
     def get_camera_target_angle(self) -> CameraAngle:
         """
@@ -271,7 +346,7 @@ class Robot:
             Angles are very rough estimates at best and accuracy is both poor
             and variable.
         """
-        return copy(self.__camera_target_angle)
+        return copy(self._camera_target_angle)
 
     def get_update_time(self) -> float:
         """
@@ -280,7 +355,7 @@ class Robot:
             adjustments and state interpolation of the next update are made
             relative to this time.
         """
-        return self.__update_time
+        return self._update_time
 
     def update(self, period: float) -> None:
         """
@@ -294,32 +369,24 @@ class Robot:
         self.__lerp_past_state()
         self.__set_next_state(period)
 
-        state = self.__motor_state
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_FL, state.fl)
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_RL, state.rl)
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_FR, state.fr)
-        self.__bot.Ctrl_Muto(Robot.ID_MOTOR_RR, state.rr)
+        state = self._motor_state
+        self.write_motors(state.fl, state.rl, state.fr, state.rr)
+        self.write_servos(self._camera_target_angle.yaw, self._camera_target_angle.pitch)
 
-        self.__bot.Ctrl_Servo(Robot.ID_SERVO_YAW, self.__camera_target_angle.yaw)
-        self.__bot.Ctrl_Servo(Robot.ID_SERVO_PITCH, self.__camera_target_angle.pitch)
-
-        self.__camera_angle.yaw = self.__camera_target_angle.yaw
-        self.__camera_angle.pitch = self.__camera_target_angle.pitch
-
-    def __lerp_past_state(self):
+    def __lerp_past_state(self) -> None:
         """
         Calculate current state based on previous motor parameters.
         """
-        last_time = self.__update_time
+        last_time = self._update_time
         next_time = time.time()
         time_diff = next_time - last_time
 
-        state = self.__motor_state
+        state = self._motor_state
         rads = time_diff * state.va
         if -0.0001 < rads < 0.0001:
-            self.__pos.x += time_diff * state.vx
-            self.__pos.y += time_diff * state.vy
-            self.__angle += rads
+            self._pos.x += time_diff * state.vx
+            self._pos.y += time_diff * state.vy
+            self._angle += rads
             return
 
         move_angle = math.atan2(state.vy, state.vx)
@@ -339,24 +406,24 @@ class Robot:
             dx = normal_scale * state.vy - radius * math.sin(move_angle + rads)
             dy = normal_scale * -state.vx - radius * math.sin(move_angle + rads)
 
-        self.__pos.x += dx
-        self.__pos.y += dy
-        self.__angle += rads
+        self._pos.x += dx
+        self._pos.y += dy
+        self._angle += rads
 
-        self.__update_time = next_time
+        self._update_time = next_time
 
-    def __set_next_state(self, period: float):
+    def __set_next_state(self, period: float) -> None:
         """
         Adjusts motor parameters to direct the bot towards the target position.
 
         Args:
             period (float): Expected time (seconds) before next update() call.
         """
-        state = self.__motor_state
+        state = self._motor_state
 
-        dx = self.__target_pos.x - self.__pos.x
-        dy = self.__target_pos.y - self.__pos.y
-        da = self.__target_angle - self.__angle
+        dx = self._target_pos.x - self._pos.x
+        dy = self._target_pos.y - self._pos.y
+        da = self._target_angle - self._angle
 
         time_to_move = abs(da / Robot.ROTATION_RATE / Robot.MAX_POWER)
         if time_to_move > period:
@@ -402,7 +469,7 @@ class Robot:
             state.vy = dy / period
             state.va = 0
 
-            move_angle = math.atan2(dy, dx) - self.__angle
+            move_angle = math.atan2(dy, dx) - self._angle
             # Within [0.0, 1.0]
             speed = dist / period
             # Within [-1.0, 1.0]
@@ -426,3 +493,172 @@ class Robot:
         state.rl = 0
         state.fr = 0
         state.rr = 0
+
+    def write_motors(self, fl: int, rl: int, fr: int, rr: int) -> None:
+        dev = self._i2c_device
+        buf = self._i2c_buf_motor
+
+        if fl > Robot.MAX_POWER:
+            fl = Robot.MAX_POWER
+        elif fl < -Robot.MAX_POWER:
+            fl = -Robot.MAX_POWER
+        buf[0][1] = fl < 0
+        buf[0][2] = abs(fl)
+
+        if rl > Robot.MAX_POWER:
+            rl = Robot.MAX_POWER
+        elif rl < -Robot.MAX_POWER:
+            rl = -Robot.MAX_POWER
+        buf[1][1] = rl < 0
+        buf[1][2] = abs(rl)
+
+        if fr > Robot.MAX_POWER:
+            fr = Robot.MAX_POWER
+        elif fr < -Robot.MAX_POWER:
+            fr = -Robot.MAX_POWER
+        buf[2][1] = fr < 0
+        buf[2][2] = abs(fr)
+
+        if rr > Robot.MAX_POWER:
+            rr = Robot.MAX_POWER
+        elif rr < -Robot.MAX_POWER:
+            rr = -Robot.MAX_POWER
+        buf[3][1] = rr < 0
+        buf[3][2] = abs(rr)
+
+        try:
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_MOTOR, buf[0])
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_MOTOR, buf[1])
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_MOTOR, buf[2])
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_MOTOR, buf[3])
+        except Exception as e:
+            print("[ERROR] I2C error while writing motor data", e)
+
+    def write_servos(self, yaw: int, pitch: int) -> None:
+        dev = self._i2c_device
+        buf = self._i2c_buf_servo
+
+        if yaw < Robot.CAMERA_YAW_MIN:
+            yaw = Robot.CAMERA_YAW_MIN
+        elif yaw > Robot.CAMERA_YAW_MAX:
+            yaw = Robot.CAMERA_YAW_MAX
+        buf[0][1] = yaw
+
+        if pitch < Robot.CAMERA_PITCH_MIN:
+            pitch = Robot.CAMERA_PITCH_MIN
+        if pitch > Robot.CAMERA_PITCH_MAX:
+            pitch = Robot.CAMERA_PITCH_MAX
+        buf[1][1] = pitch
+
+        try:
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_SERVO, buf[0])
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_SERVO, buf[1])
+        except Exception as e:
+            print("[ERROR] I2C error while writing servo data", e)
+
+    def write_led_enum_all(self, value: int) -> None:
+        dev = self._i2c_device
+        buf = self._i2c_buf2
+
+        buf[0] = 0 <= value <= 6
+        buf[1] = value
+
+        try:
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_LED_ENUM_ALL, buf)
+        except Exception as e:
+            print("[ERROR] I2C error while writing LED all-enum data", e)
+
+    def write_led_enum_one(self, n: int, value: int) -> None:
+        dev = self._i2c_device
+        buf = self._i2c_buf3
+
+        buf[0] = n
+        buf[1] = 0 <= value <= 6
+        buf[2] = value
+
+        try:
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_LED_ENUM_ONE, buf)
+        except Exception as e:
+            print("[ERROR] I2C error while writing LED one-enum data", e)
+
+    def write_led_rgb_all(self, r: int, g: int, b: int) -> None:
+        dev = self._i2c_device
+        buf = self._i2c_buf3
+
+        buf[0] = r
+        buf[1] = g
+        buf[2] = b
+
+        try:
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_LED_RGB_ALL, buf)
+        except Exception as e:
+            print("[ERROR] I2C error while writing LED all-rgb data", e)
+
+    def write_led_rgb_one(self, n: int, r: int, g: int, b: int) -> None:
+        dev = self._i2c_device
+        buf = self._i2c_buf4
+
+        buf[0] = n
+        buf[1] = r
+        buf[2] = g
+        buf[3] = b
+
+        try:
+            dev.write_i2c_block_data(Robot.I2C_ADDRESS, Robot.REG_LED_RGB_ONE, buf)
+        except Exception as e:
+            print("[ERROR] I2C error while writing LED one-rgb data", e)
+
+    def toggle_ir_reader(self, enabled: bool) -> None:
+        try:
+            self._i2c_device.write_byte_data(Robot.I2C_ADDRESS, Robot.REG_IR_SWITCH, enabled != False)
+        except Exception as e:
+            print("[ERROR] I2C error while writing IR reader state", e)
+
+    def toggle_buzzer(self, enabled: bool) -> None:
+        try:
+            self._i2c_device.write_byte_data(Robot.I2C_ADDRESS, Robot.REG_BUZZER_SWITCH, enabled != False)
+        except Exception as e:
+            print("[ERROR] I2C error while writing buzzer state", e)
+
+    def toggle_ultrasonic(self, enabled: bool) -> None:
+        try:
+            self._i2c_device.write_byte_data(Robot.I2C_ADDRESS, Robot.REG_ULTRASONIC_SWITCH, enabled != False)
+        except Exception as e:
+            print("[ERROR] I2C error while writing ultrasonic state", e)
+
+    def read_ir_tracks(self) -> TrackState:
+        try:
+            data = self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_IR_TRACK)
+            return TrackState(
+                (data & Robot.TRACK_LEFTLEFT) != 0,
+                (data & Robot.TRACK_MIDLEFT) != 0,
+                (data & Robot.TRACK_MIDRIGHT) != 0,
+                (data & Robot.TRACK_RIGHTRIGHT) != 0
+            )
+        except Exception as e:
+            print("[ERROR] I2C error while reading track state", e)
+            return TrackState(False, False, False, False)
+
+    def read_ir_reader(self) -> int:
+        try:
+            return self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_IR_READER)
+        except Exception as e:
+            print("[ERROR] I2C error while reading IR reader state", e)
+            return 0
+
+    def read_key1(self) -> bool:
+        try:
+            return self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_KEY1) != 0
+        except Exception as e:
+            print("[ERROR] I2C error while reading key1 state", e)
+            return False
+
+    def read_ultrasonic(self) -> int:
+        try:
+            low = self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_ULTRASONIC_LOW)
+            high = self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_ULTRASONIC_HIGH)
+            distance = int(high) << 8 | int(low)
+            return distance
+        except Exception as e:
+            print("[ERROR] I2C error while reading IR reader state", e)
+            return 0
