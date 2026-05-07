@@ -210,8 +210,8 @@ class Robot:
         self._target_pos = Point(0.0, 0.0)
         self._angle = 0.0
         self._target_angle = 0.0
-        self._camera_angle = copy(Robot.CAMERA_HOME)
-        self._camera_target_angle = copy(Robot.CAMERA_HOME)
+        self._camera_angle = CameraAngle(Robot.CAMERA_HOME.yaw, Robot.CAMERA_HOME.pitch)
+        self._camera_target_angle = CameraAngle(Robot.CAMERA_HOME.yaw, Robot.CAMERA_HOME.pitch)
         self._update_time = time.time()
 
     def get_motor_state(self):
@@ -495,6 +495,15 @@ class Robot:
         state.rr = 0
 
     def write_motors(self, fl: int, rl: int, fr: int, rr: int) -> None:
+        """
+        Updates all 4 motors with low latency between each to minimize error.
+
+        Args:
+            fl (int): Front left wheel power [-255..255]
+            rl (int): Rear left wheel power [-255..255]
+            fr (int): Front right wheel power [-255..255]
+            rr (int): Rear right wheel power [-255..255]
+        """
         dev = self._i2c_device
         buf = self._i2c_buf_motor
 
@@ -535,6 +544,13 @@ class Robot:
             print("[ERROR] I2C error while writing motor data", e)
 
     def write_servos(self, yaw: int, pitch: int) -> None:
+        """
+        Updates both camera servos.
+
+        Args:
+            yaw (int): Rotation around the vertical axis [0..180]
+            pitch (int): Rotation around the horiozntal axis [0..90]
+        """
         dev = self._i2c_device
         buf = self._i2c_buf_servo
 
@@ -557,6 +573,12 @@ class Robot:
             print("[ERROR] I2C error while writing servo data", e)
 
     def write_led_enum_all(self, value: int) -> None:
+        """
+        Updates all LED colors using a predefined enum value.
+
+        Args:
+            value (int): Color preset [0..7]
+        """
         dev = self._i2c_device
         buf = self._i2c_buf2
 
@@ -569,6 +591,13 @@ class Robot:
             print("[ERROR] I2C error while writing LED all-enum data", e)
 
     def write_led_enum_one(self, n: int, value: int) -> None:
+        """
+        Updates one LED color using a predefined enum value.
+
+        Args:
+            n (int): LED number [1..10]
+            value (int): Color preset [0..7]
+        """
         dev = self._i2c_device
         buf = self._i2c_buf3
 
@@ -582,6 +611,14 @@ class Robot:
             print("[ERROR] I2C error while writing LED one-enum data", e)
 
     def write_led_rgb_all(self, r: int, g: int, b: int) -> None:
+        """
+        Updates all LED colors using a specific RGB value.
+
+        Args:
+            r (int): Red component [0..255]
+            g (int): Green component [0..255]
+            b (int): Blue component [0..255]
+        """
         dev = self._i2c_device
         buf = self._i2c_buf3
 
@@ -595,6 +632,15 @@ class Robot:
             print("[ERROR] I2C error while writing LED all-rgb data", e)
 
     def write_led_rgb_one(self, n: int, r: int, g: int, b: int) -> None:
+        """
+        Updates one LED color using a specific RGB value.
+
+        Args:
+            n (int): LED number [1..10]
+            r (int): Red component [0..255]
+            g (int): Green component [0..255]
+            b (int): Blue component [0..255]
+        """
         dev = self._i2c_device
         buf = self._i2c_buf4
 
@@ -609,24 +655,46 @@ class Robot:
             print("[ERROR] I2C error while writing LED one-rgb data", e)
 
     def toggle_ir_reader(self, enabled: bool) -> None:
+        """
+        Enables or disables the infrared remote reader.
+
+        Args:
+            enabled (bool): whether the infrared sensor is enabled.
+        """
         try:
             self._i2c_device.write_byte_data(Robot.I2C_ADDRESS, Robot.REG_IR_SWITCH, enabled != False)
         except Exception as e:
             print("[ERROR] I2C error while writing IR reader state", e)
 
     def toggle_buzzer(self, enabled: bool) -> None:
+        """
+        Enables or disables the buzzer.
+
+        Args:
+            enabled (bool): whether the buzzer is enabled.
+        """
         try:
             self._i2c_device.write_byte_data(Robot.I2C_ADDRESS, Robot.REG_BUZZER_SWITCH, enabled != False)
         except Exception as e:
             print("[ERROR] I2C error while writing buzzer state", e)
 
     def toggle_ultrasonic(self, enabled: bool) -> None:
+        """
+        Enables or disables the ultrasonic distance sensor.
+
+        Args:
+            enabled (bool): whether the ultrasonic distance sensor is enabled.
+        """
         try:
             self._i2c_device.write_byte_data(Robot.I2C_ADDRESS, Robot.REG_ULTRASONIC_SWITCH, enabled != False)
         except Exception as e:
             print("[ERROR] I2C error while writing ultrasonic state", e)
 
     def read_ir_tracks(self) -> TrackState:
+        """
+        Returns:
+            TrackState: the binary state of the four IR floor trackers.
+        """
         try:
             data = self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_IR_TRACK)
             return TrackState(
@@ -640,6 +708,10 @@ class Robot:
             return TrackState(False, False, False, False)
 
     def read_ir_reader(self) -> int:
+        """
+        Returns:
+            int: the value read from an infrared remote, or 255 if none is read.
+        """
         try:
             return self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_IR_READER)
         except Exception as e:
@@ -647,6 +719,10 @@ class Robot:
             return 0
 
     def read_key1(self) -> bool:
+        """
+        Returns:
+            bool: whether the KEY1 button on the rear of the robot is pressed.
+        """
         try:
             return self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_KEY1) != 0
         except Exception as e:
@@ -654,6 +730,10 @@ class Robot:
             return False
 
     def read_ultrasonic(self) -> int:
+        """
+        Returns:
+            int: the distance (mm) measured by the ultrasonic sensor.
+        """
         try:
             low = self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_ULTRASONIC_LOW)
             high = self._i2c_device.read_byte_data(Robot.I2C_ADDRESS, Robot.REG_ULTRASONIC_HIGH)
