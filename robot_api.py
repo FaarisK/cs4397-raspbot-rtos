@@ -212,7 +212,7 @@ class Robot:
         self._target_angle = 0.0
         self._camera_angle = CameraAngle(Robot.CAMERA_HOME.yaw, Robot.CAMERA_HOME.pitch)
         self._camera_target_angle = CameraAngle(Robot.CAMERA_HOME.yaw, Robot.CAMERA_HOME.pitch)
-        self._update_time = time.time()
+        self._update_time = time.monotonic()
 
     def get_motor_state(self):
         """
@@ -378,7 +378,7 @@ class Robot:
         Calculate current state based on previous motor parameters.
         """
         last_time = self._update_time
-        next_time = time.time()
+        next_time = time.monotonic()
         time_diff = next_time - last_time
 
         state = self._motor_state
