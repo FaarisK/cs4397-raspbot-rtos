@@ -7,8 +7,7 @@ TIMER_THRESHOLD = 30.0
 CENTER_DEADZONE = 5.0
 STRAFE_DEADZONE = 0.1
 
-TURN_GAIN = 0.8
-STRAFE_GAIN = 1.0
+STRAFE_GAIN = 35.0
 
 STARTUP_SPIN_DEG = 360.0
 RED_TURN_DEG = 180.0
@@ -27,17 +26,19 @@ def IdleAction(robot):
     robot.move_relative(0.0, 0.0, 0.0)
 
 
-def GreenAction(robot, p_vector):
-    cx_norm, cy_norm, angle_deg = p_vector
+def GreenAction(robot, position):
+    angle_deg = (position - 320) / 640 * 60
+    print(angle_deg)
 
     if abs(angle_deg) > CENTER_DEADZONE:
-        robot.move_relative(0.0, 0.0, angle_deg * TURN_GAIN)
+        robot.move_relative(0.0, 0.0, angle_deg)
     else:
         robot.move_relative(0.0, 0.0, 0.0)
 
 
-def BlueAction(robot, p_vector):
-    cx_norm, cy_norm, angle_deg = p_vector
+def BlueAction(robot, position):
+    cx_norm = (position - 320) / 640
+    print(cx_norm * STRAFE_GAIN)
 
     if abs(cx_norm) > STRAFE_DEADZONE:
         robot.move_relative(cx_norm * STRAFE_GAIN, 0.0, 0.0)

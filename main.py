@@ -1,7 +1,7 @@
 import time
 import cv2
 
-import vision
+from vision import get_blue, get_green, get_red
 import actions
 from robot_api import Robot
 
@@ -56,21 +56,43 @@ def vision_task(cap):
     global last_position
 
     ret, frame = cap.read()
+    hsvImage = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    if not ret:
-        log("[vision] camera frame not read")
+    blue_area, blue_mid, blue_bbox = get_blue(hsvImage)
+    green_area, green_mid, green_bbox = get_green(hsvImage)
+    red_area, red_mid, red_bbox = get_red(hsvImage)
+
+    AREA_THRESHOLD = 10000
+
+    bbox = None
+    last_size = None
+
+    if blue_area > AREA_THRESHOLD and blue_area > green_area and blue_area > red_area:
+        last_color = 'blue'
+        last_size = blue_area
+        last_position = blue_mid
+        bbox = blue_bbox
+    elif green_area > AREA_THRESHOLD and green_area > blue_area and green_area > red_area:
+        last_color = 'green'
+        last_size = green_area
+        last_position = green_mid
+        bbox = green_bbox
+    elif red_area > AREA_THRESHOLD and red_area > green_area and red_area > blue_area:
+        last_color = 'red'
+        last_size = red_area
+        last_position = red_mid
+        bbox = red_bbox
+    else:
         last_color = None
-        last_position = None
-        return
+        last_size = 0
 
-    hsv = vision.preprocess(frame)
-    color_counts = vision.ColorCounter(hsv)
-    detected_color, position = vision.ColorLocator(hsv, color_counts)
-
-    last_color = detected_color
-    last_position = position
-
-    log(f"[vision] color={last_color}, pos={last_position}")
+    if bbox is not None:
+        print(last_color, last_size, last_position)
+        x1, y1, x2, y2 = bbox
+        frame = cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 5)
+    cv2.imshow('frame', frame)
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+        pass
 
 
 def action_task(robot):
@@ -78,13 +100,18 @@ def action_task(robot):
         actions.IdleAction(robot)
         return
 
+    # TODO uncomment
     if last_color == "green":
+        robot.write_led_rgb_all(0, 255, 0)
         actions.GreenAction(robot, last_position)
     elif last_color == "blue":
+        robot.write_led_rgb_all(0, 0, 255)
         actions.BlueAction(robot, last_position)
     elif last_color == "red":
+        robot.write_led_rgb_all(255, 0, 0)
         actions.RedAction(robot)
     else:
+        robot.write_led_rgb_all(0, 0, 0)
         actions.IdleAction(robot)
 
 
@@ -108,6 +135,10 @@ def main():
     actions.StartupAction(robot)
     log("[startup] entering round-robin scheduler")
 
+    while running and robot.get_angle() < 300 or robot.get_motor_state().va != 0:
+        robot.update(0.005)
+        time.sleep(0.005)
+
     tasks = [
         Task("safety", SAFETY_PERIOD, safety_task),
         Task("vision", VISION_PERIOD, lambda: vision_task(cap)),
@@ -121,8 +152,12 @@ def main():
 
             for task in tasks:
                 if task.due(now):
-                    log(f"[scheduler] running {task.name}")
+                    # log(f"[scheduler] running {task.name}")
+                    a = time.monotonic()
                     task.run(now)
+                    b = time.monotonic()
+                    if b - a > task.period:
+                        print("Task executed for longer than its period", task.name, format(task.period, '.4f'), format(b - a, '.4f'))
 
             time.sleep(0.005)
 
