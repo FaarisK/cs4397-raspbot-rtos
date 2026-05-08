@@ -56,13 +56,15 @@ class TrackState:
 
 
 class Robot:
+    EASING_PERIODS = 3
+    MIN_POWER = 10
     MAX_POWER = 100  # Up to 255 - Too high will shut off Pi
     # distance/(sec*power) (completely arbitrary units)
     MOVEMENT_RATE = 1.0
-    # 100 power for 1.8s = ~360deg
+    # 100 power for 1.8-2.5s = ~360deg
     # 360/1.8/100 = 2 deg/(sec*power)
-    ROTATION_RATE = math.radians(2.25)
-    MIN_POWER = 0
+    ROTATION_RATE = math.radians(2.5)
+
     ROOT2 = math.sqrt(2.0)
     # How far out of phase is wheel rotation from motion vector
     WHEEL_PHASE = math.pi * 0.25
@@ -269,10 +271,10 @@ class Robot:
             dangle (float): New angle relative to current angle (degrees).
                             (+A = Counter-clockwise)
         """
+        self.__lerp_past_state()
+
         move_rads = self._angle + math.atan2(dy, dx)
         move_dist = math.sqrt(dx * dx + dy * dy)
-
-        self.__lerp_past_state()
 
         self._target_pos.x = self._pos.x + move_dist * math.cos(move_rads)
         self._target_pos.y = self._pos.y + move_dist * math.sin(move_rads)
@@ -292,7 +294,7 @@ class Robot:
             Point: Gets the bot's current estimated position within arbitrary
                    bot space.
         """
-        return copy(self._pos)
+        return copy(self._pos)0
 
     def home_camera_angle(self) -> None:
         """
@@ -366,10 +368,11 @@ class Robot:
             period (float): Expected time (seconds) before next update() call.
         """
 
+        state = self._motor_state
+
         self.__lerp_past_state()
         self.__set_next_state(period)
 
-        state = self._motor_state
         self.write_motors(state.fl, state.rl, state.fr, state.rr)
         self.write_servos(self._camera_target_angle.yaw, self._camera_target_angle.pitch)
 
@@ -378,8 +381,8 @@ class Robot:
         Calculate current state based on previous motor parameters.
         """
         last_time = self._update_time
-        next_time = time.monotonic()
-        time_diff = next_time - last_time
+        cur_time = time.monotonic()
+        time_diff = cur_time - last_time
 
         state = self._motor_state
         rads = time_diff * state.va
@@ -387,6 +390,7 @@ class Robot:
             self._pos.x += time_diff * state.vx
             self._pos.y += time_diff * state.vy
             self._angle += rads
+            self._update_time = cur_time
             return
 
         move_angle = math.atan2(state.vy, state.vx)
@@ -410,80 +414,68 @@ class Robot:
         self._pos.y += dy
         self._angle += rads
 
-        self._update_time = next_time
+        self._update_time = cur_time
 
     def __set_next_state(self, period: float) -> None:
-        """
-        Adjusts motor parameters to direct the bot towards the target position.
-
-        Args:
-            period (float): Expected time (seconds) before next update() call.
-        """
         state = self._motor_state
 
         dx = self._target_pos.x - self._pos.x
         dy = self._target_pos.y - self._pos.y
         da = self._target_angle - self._angle
 
+        # Attempt to rotate to the target angle first.
+
         time_to_move = abs(da / Robot.ROTATION_RATE / Robot.MAX_POWER)
-        if time_to_move > period:
-            normal_scale = (period / time_to_move)
-            da *= normal_scale
+        periods_to_move = time_to_move / period
+        if periods_to_move > Robot.EASING_PERIODS:
+            power_scale = 1
+        else:
+            power_scale = periods_to_move / Robot.EASING_PERIODS
 
-        state.va = da / period
-
-        move_power = state.va / Robot.ROTATION_RATE
-        move_power_round = round(move_power)
-
-        # For simplicity's sake (*not* calculating an arc to move to target)
-        # this will turn to target angle first, then move to target pos.
-
-        if abs(move_power_round) > Robot.MIN_POWER:
-            move_power_error = move_power_round / move_power
-            da *= move_power_error
-
+        move_power = int(Robot.MAX_POWER * power_scale)
+        if move_power > Robot.MIN_POWER:
+            if da < 0:
+                move_power = -move_power
             state.vx = 0
             state.vy = 0
-            state.va *= move_power_error
+            state.va = Robot.ROTATION_RATE * move_power
 
-            state.fl = move_power_round
-            state.rl = move_power_round
-            state.fr = -move_power_round
-            state.rr = -move_power_round
-
+            state.fl = move_power
+            state.rl = move_power
+            state.fr = -move_power
+            state.rr = -move_power
             return
 
-        # Turn power is below minimum threshold, go ahead with position update.
+        # Rotation rate below power threshold,
+        # attempt to move to target position.
 
         dist = math.sqrt(dx * dx + dy * dy)
         time_to_move = abs(dist / Robot.MOVEMENT_RATE / Robot.MAX_POWER)
-        if time_to_move > period:
-            normal_scale = (period / time_to_move)
-            dist *= normal_scale
-            dx *= normal_scale
-            dy *= normal_scale
+        periods_to_move = time_to_move / period
+        if periods_to_move > Robot.EASING_PERIODS:
+            power_scale = 1
+        else:
+            power_scale = periods_to_move / Robot.EASING_PERIODS
 
-        move_power = dist / period / Robot.MOVEMENT_RATE
+        move_power = Robot.MAX_POWER * power_scale
         if move_power > Robot.MIN_POWER:
-            state.vx = dx / period
-            state.vy = dy / period
+            state.vx = Robot.MOVEMENT_RATE * move_power * (dx / dist)
+            state.vy = Robot.MOVEMENT_RATE * move_power * (dy / dist)
             state.va = 0
 
             move_angle = math.atan2(dy, dx) - self._angle
-            # Within [0.0, 1.0]
-            speed = dist / period
-            # Within [-1.0, 1.0]
-            wheel_cos = math.cos(move_angle - Robot.WHEEL_PHASE)
-            wheel_sin = math.sin(move_angle - Robot.WHEEL_PHASE)
+            wheel_cos = round(move_power * math.cos(move_angle - Robot.WHEEL_PHASE))
+            wheel_sin = round(move_power * math.sin(move_angle - Robot.WHEEL_PHASE))
 
-            state.fl = round(wheel_cos * speed)
-            state.rl = round(wheel_sin * speed)
-            state.fr = round(wheel_sin * speed)
-            state.rr = round(wheel_cos * speed)
+            state.fl = wheel_cos
+            state.rl = wheel_sin
+            state.fr = wheel_sin
+            state.rr = wheel_cos
 
             return
 
-        # Move power is below minimum threshold, just idle.
+        # Movement rate below power threshold,
+        # just idle for now.
 
         state.vx = 0
         state.vy = 0
